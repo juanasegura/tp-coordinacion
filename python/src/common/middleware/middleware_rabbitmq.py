@@ -4,7 +4,6 @@ from .middleware import (MessageMiddlewareQueue, MessageMiddlewareExchange,
                          MessageMiddlewareDisconnectedError,
                          MessageMiddlewareCloseError)
 
-
 class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
 
     def __init__(self, host, queue_name):
@@ -54,11 +53,6 @@ class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
             connection = pika.BlockingConnection(pika.ConnectionParameters(host=host))
             channel = connection.channel()
             channel.exchange_declare(exchange=exchange_name, exchange_type="direct")
-            result = channel.queue_declare(queue='', exclusive=True)
-            queue_name = result.method.queue
-            for key in routing_keys:
-                channel.queue_bind(exchange=exchange_name, queue=queue_name,
-                                   routing_key=key)
         except pika.exceptions.AMQPConnectionError:
             raise MessageMiddlewareDisconnectedError()
         except Exception:
@@ -67,10 +61,14 @@ class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
         self.channel = channel
         self.exchange_name = exchange_name
         self.routing_keys = routing_keys
-        self.queue_name = queue_name
+        self.queue_name = None
         self.is_consuming = False
 
     def start_consuming(self, on_message_callback):
+        if self.queue_name is None:
+            self.queue_name = _declare_consumer_queue(
+                self.channel, self.exchange_name, self.routing_keys
+            )
         _start_consuming(self, on_message_callback)
 
     def stop_consuming(self):
@@ -136,3 +134,14 @@ def _close(connection):
             connection.close()
     except Exception:
         raise MessageMiddlewareCloseError()
+
+def _declare_consumer_queue(channel, exchange_name, routing_keys):
+    try:
+        queue_name = channel.queue_declare(queue='', exclusive=True).method.queue
+        for key in routing_keys:
+            channel.queue_bind(exchange=exchange_name, queue=queue_name, routing_key=key)
+        return queue_name
+    except pika.exceptions.AMQPConnectionError:
+        raise MessageMiddlewareDisconnectedError()
+    except Exception:
+        raise MessageMiddlewareMessageError()
