@@ -35,7 +35,7 @@ class SumFilter:
             )
             self.data_output_exchanges.append(data_output_exchange)
         self.lock = threading.Lock()
-        self.amount_by_client = {} ## diccionario tipo {cliente: {fruta: }}
+        self.amount_by_client = {} # diccionario tipo {cliente: {fruta: }}
         self.records_total = {}  # {cliente: n}   n del EOF, y además flag "ya estoy en cierre"
         self.local_count = {}  # {cliente: int}  registros recibidos y todavía no anunciados
         self.global_count = {}  # {cliente: int}  suma de todos los COUNT que me llegaron
