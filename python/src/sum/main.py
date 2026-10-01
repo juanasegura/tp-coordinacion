@@ -2,6 +2,7 @@ import os
 import logging
 import threading
 import zlib
+import signal
 
 from common import middleware, message_protocol, fruit_item
 
@@ -40,8 +41,8 @@ class SumFilter:
         self.global_count = {}  # {cliente: int}  suma de todos los COUNT que me llegaron
         self.opened = set()  # clientes cuyo OPEN ya procesé
 
-    def _get_target_aggregation(self, fruit):
-        return zlib.crc32(fruit.encode("utf-8")) % AGGREGATION_AMOUNT
+    def _get_target_aggregation(self, client_id, fruit):
+        return zlib.crc32(f"{client_id}{fruit}".encode("utf-8")) % AGGREGATION_AMOUNT
 
     # Publica la cantidad de mensajes recibido por un cliente cuyo eof ya fue anunciado
     def _publish_count(self, client_id, amount):
@@ -70,11 +71,11 @@ class SumFilter:
             return
         if self.global_count.get(client_id, 0) < self.records_total[client_id]:
             return
-        self._flush(client_id)
+        self._send_to_aggregations(client_id)
 
-    def _flush(self, client_id):
+    def _send_to_aggregations(self, client_id):
         for fruit, final_fruit_item in self.amount_by_client.pop(client_id, {}).items():
-            self.data_output_exchanges[self._get_target_aggregation(fruit)].send(
+            self.data_output_exchanges[self._get_target_aggregation(client_id, fruit)].send(
                 message_protocol.internal.serialize(
                     [client_id, final_fruit_item.fruit, final_fruit_item.amount]
                 )
@@ -99,8 +100,8 @@ class SumFilter:
             else:
                 self.local_count[client_id] = self.local_count.get(client_id, 0) + 1
 
-# me falta loggear el eof
     def _process_eof(self, client_id, records):
+        logging.info(f"Sum {ID} received EOF of client {client_id} with {records} records")
         with self.lock:
             if client_id in self.records_total:
                 return
@@ -140,14 +141,32 @@ class SumFilter:
             self._process_eof(*fields)
         ack()
 
-    def start(self):
-        threading.Thread(
-            target=self.control_input.start_consuming,
-            args=[self._on_control_message],
-            daemon=True,
-        ).start()
-        self.input_queue.start_consuming(self.process_data_messsage)
+    def _control_loop(self):
+        try:
+            self.control_input.start_consuming(self._on_control_message)
+        finally:
+            self.input_queue.stop_consuming()
+            self.control_input.close()
+            for data_output_exchange in self.data_output_exchanges:
+                data_output_exchange.close()
 
+    def _handle_sigterm(self):
+        logging.info("Received SIGTERM signal")
+        self.control_input.stop_consuming()
+        self.input_queue.stop_consuming()
+
+    def start(self):
+        signal.signal(signal.SIGTERM, lambda signum, frame: self._handle_sigterm())
+
+        t_control = threading.Thread(target=self._control_loop, daemon=True)
+        t_control.start()
+        try:
+            self.input_queue.start_consuming(self.process_data_messsage)
+        finally:
+            self.control_input.stop_consuming()
+            t_control.join()
+            self.input_queue.close()
+            self.control_output.close()
 
 def main():
     logging.basicConfig(level=logging.INFO)

@@ -1,5 +1,6 @@
 import os
 import logging
+import signal
 
 from common import middleware, message_protocol, fruit_item
 
@@ -47,8 +48,17 @@ class JoinFilter:
             )
         ack()
 
+    def _handle_sigterm(self):
+        logging.info("Received SIGTERM signal")
+        self.input_queue.stop_consuming()
+
     def start(self):
-        self.input_queue.start_consuming(self.process_messsage)
+        signal.signal(signal.SIGTERM, lambda signum, frame: self._handle_sigterm())
+        try:
+            self.input_queue.start_consuming(self.process_messsage)
+        finally:
+            self.input_queue.close()
+            self.output_queue.close()
 
 
 def main():

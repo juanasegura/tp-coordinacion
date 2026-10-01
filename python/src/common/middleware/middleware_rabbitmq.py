@@ -122,8 +122,9 @@ def _stop_consuming(middleware):
     if not middleware.is_consuming:
         return
     try:
-        middleware.channel.stop_consuming()
-        middleware.is_consuming = False
+        middleware.connection.add_callback_threadsafe(
+            lambda: middleware.channel.stop_consuming()
+        )
     except pika.exceptions.AMQPConnectionError:
         raise MessageMiddlewareDisconnectedError()
 
